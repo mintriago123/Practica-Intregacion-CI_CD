@@ -1,0 +1,59 @@
+name: CI Laravel
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+
+      - name: Ubicar caché de Composer
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Restaurar caché de Composer
+        uses: actions/cache@v6
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ hashFiles('composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      - name: Instalar dependencias
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Validar sintaxis PHP
+        run: find app routes tests -name "*.php" -print0 | xargs -0 -n1 php -l
+
+      - name: Preparar entorno
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Ejecutar pruebas
+        run: php artisan test
+
+  construir:
+    needs: verificar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Construir imagen Docker
+        run: docker build -t laboratorio-ci-laravel:${{ github.sha }} .
+
+      - name: Probar la imagen
+        run: |
+          docker run -d --name api -p 8000:8000 \
+            -e APP_KEY="base64:$(openssl rand -base64 32)" \
+            laboratorio-ci-laravel:${{ github.sha }}
+          curl --fail --silent --show-error --retry 10 --retry-all-errors --retry-delay 1 \
+            http://localhost:8000/api/health
